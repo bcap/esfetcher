@@ -58,6 +58,7 @@ func (c *Client) Query(ctx context.Context, index string, query string, fetchAll
 		return c.querySlice(ctx, index, query, fetchAll, 0, 1, &docs, &totalDocs, nil, writer)
 	}
 
+	start := time.Now()
 	group, ctx := errgroup.WithContext(ctx)
 	var writerLock sync.Mutex
 	for i := 0; i < slices; i++ {
@@ -69,6 +70,10 @@ func (c *Client) Query(ctx context.Context, index string, query string, fetchAll
 	// progress monitor every 10 seconds
 	go func() {
 		logEvery := 10 * time.Second
+		maxAvgPoints := 6 // moving average over 1 minute (10s * 6 = 1m)
+
+		var avgPoints int
+		var avgSpeed float64
 		var lastDocs int64
 		ticker := time.NewTicker(logEvery)
 		defer ticker.Stop()
@@ -80,18 +85,34 @@ func (c *Client) Query(ctx context.Context, index string, query string, fetchAll
 				localDocs := docs.Load()
 				localTotalDocs := totalDocs.Load()
 				remainingDocs := localTotalDocs - localDocs
+
+				// Calculate average speed. Apply moving average to smooth out speed and ETA calculations
 				docsPerS := float64(localDocs-lastDocs) / float64(logEvery/time.Second)
+				avgSpeed = (avgSpeed*float64(avgPoints) + docsPerS) / float64(avgPoints+1)
+				if avgPoints < maxAvgPoints {
+					avgPoints++
+				}
+
 				eta := time.Duration(float64(remainingDocs) / docsPerS * float64(time.Second)).Truncate(time.Second)
 				log.Printf(
-					"Fetched %d documents out of %d documents (%.1f%%). Speed: %d docs/s. ETA: %v",
-					localDocs, localTotalDocs, float64(localDocs)/float64(localTotalDocs)*100, int64(docsPerS), eta,
+					"Fetched %d documents out of %d documents (%.1f%%). Avg Speed: %d docs/s. ETA: %v",
+					localDocs, localTotalDocs, float64(localDocs)/float64(localTotalDocs)*100, int(avgSpeed), eta,
 				)
 				lastDocs = localDocs
 			}
 		}
 	}()
 
-	return group.Wait()
+	if err := group.Wait(); err != nil {
+		return err
+	}
+
+	taken := time.Since(start)
+	log.Printf(
+		"Fetched %d documents in %v. Avg Speed: %d docs/s",
+		totalDocs.Load(), taken, int(float64(totalDocs.Load())/taken.Seconds()),
+	)
+	return nil
 }
 
 func (c *Client) querySlice(ctx context.Context, index string, query string, fetchAll bool, slice int, maxSlices int, docs *atomic.Int64, totalDocs *atomic.Int64, writerLock *sync.Mutex, writer io.Writer) error {
