@@ -146,15 +146,15 @@ func (c *Client) scroll(ctx context.Context, sr *SearchResult, docs *atomic.Int6
 			return fmt.Errorf("failed to query Elasticsearch: %v", sr.ShardsMetaResult.Failures)
 		}
 
+		if len(sr.Hits.Hits) == 0 {
+			break
+		}
+
 		docs.Add(int64(len(sr.Hits.Hits)))
 		logProgress()
 
 		if err := writeJsons(sr.Hits.Hits, writerLock, writer); err != nil {
 			return err
-		}
-
-		if len(sr.Hits.Hits) == 0 {
-			break
 		}
 
 		scrollId = sr.ScrollId
