@@ -10,18 +10,22 @@ import (
 	"github.com/alexflint/go-arg"
 )
 
-type Args struct {
+type args struct {
 	ESURL       string `arg:"-u,--elasticsearch-url,required" help:"URL of the Elasticsearch cluster"`
-	User        string `arg:"env:ES_USER" help:"User to authenticate with Elasticsearch"`
-	Password    string `arg:"env:ES_PASSWD" help:"Password to authenticate with Elasticsearch"`
+	User        string `arg:"env:ES_USER" help:"Basic Auth User to authenticate with Elasticsearch"`
+	Password    string `arg:"env:ES_PASSWD" help:"Basic Auth Password to authenticate with Elasticsearch"`
 	Index       string `arg:"-i,--index,required" help:"Index to search in"`
 	QueryString string `arg:"-q,--query" help:"Query to run against the index"`
 	QueryFile   string `arg:"-f,--query-file" help:"File containing the query to run against the index"`
 	FetchAll    bool   `arg:"-a,--fetch-all" help:"Fetch all results from the query by paginating through it. Use with caution, as this can be a lot of data. See also --slices"`
-	Slices      int    `arg:"-s,--slices" default:"1" help:"Number of slices to use for the scroll query. Improves query performance. Only relevant if --fetch-all is passed. NOTE: Do not set a number of slices greater than the number of shards in the queried index"`
+	Slices      int    `arg:"-s,--slices" default:"1" help:"Number of slices to use for the scroll query. Improves fetching performance by running queries in parallel. Only relevant if --fetch-all is passed. NOTE: Do not set a number of slices greater than the number of shards in the queried index. See more at https://www.elastic.co/guide/en/elasticsearch/reference/current/paginate-search-results.html"`
 }
 
-func (a Args) Query() (string, error) {
+func (args) Description() string {
+	return "Program to fetch documents from Elasticsearch. Supports pagination\n"
+}
+
+func (a args) Query() (string, error) {
 	if a.QueryFile != "" && a.QueryString != "" {
 		return "", fmt.Errorf("both query and query-file were provided, please provide only one")
 	}
@@ -42,7 +46,7 @@ func (a Args) Query() (string, error) {
 }
 
 func main() {
-	var args Args
+	var args args
 	arg.MustParse(&args)
 
 	query, err := args.Query()
