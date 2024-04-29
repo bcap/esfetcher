@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -64,6 +65,32 @@ func (c *Client) Query(ctx context.Context, index string, query string, fetchAll
 			return c.querySlice(ctx, index, query, fetchAll, i, slices, &docs, &totalDocs, &writerLock, writer)
 		})
 	}
+
+	// progress monitor every 10 seconds
+	go func() {
+		logEvery := 10 * time.Second
+		var lastDocs int64
+		ticker := time.NewTicker(logEvery)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				localDocs := docs.Load()
+				localTotalDocs := totalDocs.Load()
+				remainingDocs := localTotalDocs - localDocs
+				docsPerS := float64(localDocs-lastDocs) / float64(logEvery/time.Second)
+				eta := time.Duration(float64(remainingDocs) / docsPerS * float64(time.Second)).Truncate(time.Second)
+				log.Printf(
+					"Fetched %d documents out of %d documents (%.1f%%). Speed: %d docs/s. ETA: %v",
+					localDocs, localTotalDocs, float64(localDocs)/float64(localTotalDocs)*100, int64(docsPerS), eta,
+				)
+				lastDocs = localDocs
+			}
+		}
+	}()
+
 	return group.Wait()
 }
 
@@ -123,13 +150,6 @@ func (c *Client) scroll(ctx context.Context, sr *SearchResult, docs *atomic.Int6
 		}
 	}()
 
-	logProgress := func() {
-		localDocs := docs.Load()
-		localTotalDocs := totalDocs.Load()
-		log.Printf("Fetched %d documents out of %d documents (%.1f%%)", localDocs, localTotalDocs, float64(localDocs)/float64(localTotalDocs)*100)
-	}
-	logProgress()
-
 	for {
 		body := fmt.Sprintf(`{"scroll":"1m","scroll_id":"%s"}`, scrollId)
 		_, data, err := c.do(ctx, "POST", "_search/scroll", body)
@@ -151,7 +171,6 @@ func (c *Client) scroll(ctx context.Context, sr *SearchResult, docs *atomic.Int6
 		}
 
 		docs.Add(int64(len(sr.Hits.Hits)))
-		logProgress()
 
 		if err := writeJsons(sr.Hits.Hits, writerLock, writer); err != nil {
 			return err
